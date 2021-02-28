@@ -9,6 +9,7 @@ use std::collections::VecDeque;
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Token {
+    // Keywords
     Let,
     Import,
     Node,
@@ -23,16 +24,49 @@ pub enum Token {
     Or,
     Foreach,
     In,
+
+    // Operators
+    Minus,
+    Plus,
+    Slash,
+    Star,
+    Modulus,
+    Assign,
+    Equal,
+    Less,
+    Great,
+    LessEq,
+    GreatEq,
+    Not,
+    NotEq,
+
+    // Delimeters
+    LParen,
+    RParen,
+    LBrace,
+    RBrace,
+    LBracket,
+    RBracket,
+
+    // Literals
     Integer(i32),
     Float(f32),
     Str(String),
+
     Identifier(String),
 
     Comment(String),
     Eof,
 }
 
-pub type TokenTuple = (usize, Token);
+#[derive(Clone, Debug, PartialEq)]
+pub struct Location {
+    pub line: usize,
+    pub column: usize,
+}
+
+pub type TokenTuple = (Location, Token);
+
 
 struct Lexer<'a> {
    iter: Peekable<CharIndices<'a>>,
@@ -49,26 +83,104 @@ impl<'a> Lexer<'a> {
 
     fn tokenize(&mut self) -> Result<VecDeque<TokenTuple>, StitchError> {
         let mut tokens = VecDeque::new();
+        let mut line = 0;
+        let mut last_pos = 0;
+        let mut column = 0;
         loop {
             match self.iter.next() {
                 Some((pos, ch)) => {
+                    column = column + (pos - last_pos);
+                    last_pos = pos;
+                    println!("Column: {}", column);
+                    let loc = Location{line: line, column: column};
                     match ch {
                         'a' ..= 'z' | 'A' ..= 'Z' | '_' => {
                             let ident = self.consume_identifier(ch);
-                            tokens.push_back((pos, ident));
+                            tokens.push_back((loc, ident));
                         }
                         '0' ..= '9' =>
-                            tokens.push_back((pos, self.consume_number(ch, false))),
+                            tokens.push_back((loc, self.consume_number(ch, false))),
                         '"' =>
-                            tokens.push_back((pos, self.consume_wrapped('"', |b| Ok(Token::Str(b)))?)),
-                        ' ' | '\n' | '\t' | '\r' => {},
+                            tokens.push_back((loc, self.consume_wrapped('"', |b| Ok(Token::Str(b)))?)),
+                        ' ' | '\t' => {}
+                        '\n' | '\r' => {
+                            line = line + 1;
+                            column = 0;
+                            last_pos += 1; // This accounts for the invisible newline, and later calculations for column.
+                        },
+                        '#' => {
+                            //let comment = self.consume_comment();
+                            //tokens.push_back((loc, comment));
+                        },
+                        '-' => {
+                            if let Some(&(_, c)) = self.iter.peek() {
+                                if c.is_numeric() {
+                                    tokens.push_back((loc, self.consume_number('0', true)));
+                                } else {
+                                    tokens.push_back((loc, Token::Minus));
+                                }
+                            }
+                        },
+                        '+' => tokens.push_back((loc, Token::Plus)),
+                        '*' => tokens.push_back((loc, Token::Star)),
+                        '/' => tokens.push_back((loc, Token::Slash)),
+                        '%' => tokens.push_back((loc, Token::Modulus)),
+                        '(' => tokens.push_back((loc, Token::LParen)),
+                        ')' => tokens.push_back((loc, Token::RParen)),
+                        '{' => tokens.push_back((loc, Token::LBrace)),
+                        '}' => tokens.push_back((loc, Token::RBrace)),
+                        '[' => tokens.push_back((loc, Token::LBracket)),
+                        ']' => tokens.push_back((loc, Token::RBracket)),
+                        '=' => {
+                            let mut tok = Token::Assign;
+                            if let Some(&(_, c)) = self.iter.peek() {
+                                if c == '=' {
+                                    self.iter.next();
+                                    tok = Token::Equal;
+                                }
+                            }
+                            tokens.push_back((loc, tok));
+                        },
+                        '<' => {
+                            let mut tok = Token::Less;
+                            if let Some(&(_, c)) = self.iter.peek() {
+                                if c == '=' {
+                                    self.iter.next();
+                                    tok = Token::LessEq;
+                                }
+                            }
+                            tokens.push_back((loc, tok));
+                        },
+                        '>' => {
+                            let mut tok = Token::Great;
+                            if let Some(&(_, c)) = self.iter.peek() {
+                                if c == '=' {
+                                    self.iter.next();
+                                    tok = Token::GreatEq;
+                                }
+                            }
+                            tokens.push_back((loc, tok));
+                        },
+                        '!' => {
+                            let mut tok = Token::Not;
+                            if let Some(&(_, c)) = self.iter.peek() {
+                                if c == '=' {
+                                    self.iter.next();
+                                    tok = Token::NotEq;
+                                }
+                            }
+                            tokens.push_back((loc, tok));
+                        },
                         c => {
-                            return Err(StitchError::new(0, 0, format!("unexpected character: {}", c)));
+                            let msg = format!("unexpected character: '{}'", c);
+                            return Err(StitchError::new(line, 0, msg));
                         },
                     }
                 }
                 None => {
-                    tokens.push_back((self.prog.len(), Token::Eof));
+                    let column = column + self.prog.len() - last_pos;
+                    let loc = Location{line: line, column: column};
+                    tokens.push_back((loc, Token::Eof));
                     return Ok(tokens)
                 }
             }
@@ -103,6 +215,8 @@ impl<'a> Lexer<'a> {
                 if let Some((_, ch)) = self.iter.next() {
                     buffer.push(ch);
                 }
+            } else if ch == '\n' { // Tokens shouldn't span multiple lines, not even strings.
+                break;
             } else {
                 buffer.push(ch);
             }
@@ -111,7 +225,6 @@ impl<'a> Lexer<'a> {
         let msg = format!("expected closing '{}'", wrapper);
         Err(StitchError::new(0, 0, msg))
     }
-
 
     fn consume_number(&mut self, first: char, is_negative: bool) -> Token {
         let i = self.consume_while(first.to_string(), |c| c.is_digit(10));
@@ -146,7 +259,6 @@ impl<'a> Lexer<'a> {
 }
 
 pub fn tokenize(prog: &str) -> Result<VecDeque<TokenTuple>, StitchError> {
-    println!("TOKENIZING: {}", prog);
     Lexer::new(prog).tokenize()
 }
 
@@ -157,10 +269,15 @@ mod tests {
    use super::Token::*;
 
    macro_rules! test_keywords {
-       ( $( $x:expr, $y:ident),* ) => {
-           $(
-               assert_eq!(tokenize_queue($x), vec![(0, $y), ($x.len(), Eof)]);
-           )*
+       ( $( ($x:expr, $y:ident) ),* ) => {
+           $( assert_eq!(tokenize_queue($x), vec![(loc!(0, 0), $y), (loc!(0, $x.len()), Eof)]); )*
+       };
+   }
+
+   macro_rules! loc {
+       ($line:expr, $col:expr) => {
+           {println!("Location: {}, {}", $line, $col);
+           Location{line: $line, column: $col}}
        };
    }
 
@@ -174,32 +291,74 @@ mod tests {
    }
 
    #[test]
-   fn tokenize_basic_test() {
-       assert_eq!(tokenize_queue("10"), vec![(0, Integer(10)), (2, Eof)]);
-       assert_eq!(tokenize_queue("foo"), vec![(0, Identifier(String::from("foo"))), (3, Eof)]);
-       assert_eq!(tokenize_queue("\"foo\""), vec![(0, Str(String::from("foo"))), (5, Eof)]);
+   fn correct_locations() {
+       assert_eq!(tokenize_queue("1 2"), vec![(loc!(0, 0), Integer(1)), (loc!(0, 2), Integer(2)), (loc!(0, 3), Eof)]);
+       assert_eq!(tokenize_queue("1\n2"), vec![(loc!(0, 0), Integer(1)), (loc!(1, 0), Integer(2)), (loc!(1, 1), Eof)]);
+   }
 
+   #[test]
+   fn tokenize_basic_test() {
+       assert_eq!(tokenize_queue("10"), vec![(loc!(0, 0), Integer(10)), (loc!(0, 2), Eof)]);
+       assert_eq!(tokenize_queue("foo"), vec![(loc!(0, 0), Identifier(String::from("foo"))), (loc!(0, 3), Eof)]);
+   }
+
+   #[test]
+   fn tokenize_operators() {
+       assert_eq!(tokenize_queue("="), vec![(loc!(0, 0), Assign), (loc!(0, 1), Eof)]);
+       assert_eq!(tokenize_queue("=="), vec![(loc!(0, 0), Equal), (loc!(0, 2), Eof)]);
+
+       assert_eq!(tokenize_queue("<"), vec![(loc!(0, 0), Less), (loc!(0, 1), Eof)]);
+       assert_eq!(tokenize_queue("<="), vec![(loc!(0, 0), LessEq), (loc!(0, 2), Eof)]);
+
+       assert_eq!(tokenize_queue(">"), vec![(loc!(0, 0), Great), (loc!(0, 1), Eof)]);
+       assert_eq!(tokenize_queue(">="), vec![(loc!(0, 0), GreatEq), (loc!(0, 2), Eof)]);
+
+       assert_eq!(tokenize_queue("!"), vec![(loc!(0, 0), Not), (loc!(0, 1), Eof)]);
+       assert_eq!(tokenize_queue("!="), vec![(loc!(0, 0), NotEq), (loc!(0, 2), Eof)]);
+   }
+
+   #[test]
+   fn tokenize_keywords() {
        test_keywords!(
-           "let", Let,
-           "if", If,
-           "else", Else,
-           "true", True,
-           "false", False,
-           "and", And,
-           "or", Or,
-           "foreach", Foreach,
-           "in", In,
-           "internal", Internal,
-           "import", Import,
-           "node", Node,
-           "fn", Function,
-           "mod", Modifier
+           ("let",      Let),
+           ("if",       If),
+           ("else",     Else),
+           ("true",     True),
+           ("false",    False),
+           ("and",      And),
+           ("or",       Or),
+           ("foreach",  Foreach),
+           ("in",       In),
+           ("internal", Internal),
+           ("import",   Import),
+           ("node",     Node),
+           ("fn",       Function),
+           ("mod",      Modifier)
        );
    }
 
    #[test]
+   fn tokenize_integers() {
+       assert_eq!(tokenize_queue("12345"), vec![(loc!(0, 0), Integer(12345)), (loc!(0, 5), Eof)]);
+       assert_eq!(tokenize_queue("-152"), vec![(loc!(0, 0), Integer(-152)), (loc!(0, 4), Eof)]);
+       assert_eq!(tokenize_queue(" 12"), vec![(loc!(0, 1), Integer(12)), (loc!(0, 3), Eof)]);
+       assert_eq!(tokenize_queue("\n10"), vec![(loc!(1, 0), Integer(10)), (loc!(1, 2), Eof)]);
+   }
+
+   #[test]
+   fn tokenize_strings() {
+       assert_eq!(tokenize_queue("\"foo\""), vec![(loc!(0, 0), Str(String::from("foo"))), (loc!(0, 5), Eof)]);
+   }
+
+
+   #[test]
    fn tokenize_basic_errors() {
        assert!(tokenize("\"foo")
+               .unwrap_err()
+               .to_string()
+               .contains("expected closing '\"'"));
+       // No newlines mid-string.
+       assert!(tokenize("\"foo\n\"")
                .unwrap_err()
                .to_string()
                .contains("expected closing '\"'"));
