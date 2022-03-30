@@ -40,13 +40,15 @@ pub enum Token {
     Not,
     NotEq,
 
-    // Delimeters
+    // Delimiters
     LParen,
     RParen,
     LBrace,
     RBrace,
     LBracket,
     RBracket,
+    Comma,
+    Semicolon,
 
     // Literals
     Integer(i32),
@@ -59,7 +61,13 @@ pub enum Token {
     Eof,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+impl Default for Token {
+    fn default() -> Self {
+        Token::Eof
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Location {
     pub line: usize,
     pub column: usize,
@@ -91,7 +99,7 @@ impl<'a> Lexer<'a> {
                 Some((pos, ch)) => {
                     column = column + (pos - last_pos);
                     last_pos = pos;
-                    println!("Column: {}", column);
+                    //println!("Column: {}", column);
                     let loc = Location{line: line, column: column};
                     match ch {
                         'a' ..= 'z' | 'A' ..= 'Z' | '_' => {
@@ -131,6 +139,8 @@ impl<'a> Lexer<'a> {
                         '}' => tokens.push_back((loc, Token::RBrace)),
                         '[' => tokens.push_back((loc, Token::LBracket)),
                         ']' => tokens.push_back((loc, Token::RBracket)),
+                        ';' => tokens.push_back((loc, Token::Semicolon)),
+                        ',' => tokens.push_back((loc, Token::Comma)),
                         '=' => {
                             let mut tok = Token::Assign;
                             if let Some(&(_, c)) = self.iter.peek() {
@@ -276,7 +286,7 @@ mod tests {
 
    macro_rules! loc {
        ($line:expr, $col:expr) => {
-           {println!("Location: {}, {}", $line, $col);
+           {//println!("Location: {}, {}", $line, $col);
            Location{line: $line, column: $col}}
        };
    }
